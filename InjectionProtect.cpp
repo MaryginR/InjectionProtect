@@ -1,12 +1,40 @@
 ﻿#include "InjectionProtect.h"
 
-void CheckIAT()
+bool checkAllMemoryProtection() {
+    HANDLE hProcess = GetCurrentProcess();
+    if (hProcess == NULL) {
+        throw "Failed to get current process handle.";
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION mbi;
+    LPVOID address = nullptr;
+
+    // Перебираем все участки памяти
+    while (VirtualQueryEx(hProcess, address, &mbi, sizeof(mbi)) != 0) {
+        // Проверяем, что память используется (MEM_COMMIT)
+        if (mbi.State == MEM_COMMIT) {
+            // Проверяем, что память не имеет прав на запись
+            if (mbi.Protect == PAGE_EXECUTE_READWRITE) {
+                CloseHandle(hProcess);
+                return false; // Обнаружена память с правами на запись и исполнение
+            }
+        }
+
+        // Переходим к следующему участку памяти
+        address = (LPBYTE)mbi.BaseAddress + mbi.RegionSize;
+    }
+
+    CloseHandle(hProcess);
+    return true;  // Все проверенные участки памяти имеют корректную защиту
+}
+
+bool CheckIAT()
 {
-    // Получаем дескриптор текущего модуля
     HMODULE hModule = GetModuleHandle(NULL);
     if (!hModule)
     {
-        std::cerr << "Error: Unable to get module handle." << std::endl;
+        throw "Error: Unable to get module handle.";
         return;
     }
 
@@ -18,7 +46,7 @@ void CheckIAT()
     DWORD importDirectoryRVA = pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
     if (importDirectoryRVA == 0)
     {
-        std::cerr << "Error: No import table found." << std::endl;
+        throw "Error: No import table found.";
         return;
     }
 
@@ -26,7 +54,6 @@ void CheckIAT()
 
     while (pImportDesc->Name != 0)
     {
-        // Получаем имя DLL
         LPCSTR pDllName = (LPCSTR)((DWORD_PTR)hModule + pImportDesc->Name);
         HMODULE hImportedModule = LoadLibraryA(pDllName);
 
@@ -56,7 +83,7 @@ void CheckIAT()
                 if (pRealAddr && pRealAddr != (FARPROC)pFirstThunk->u1.Function)
                 {
                     
-                    std::cout << "Warning: Possible IAT hook detected";
+                    return false; //Обнаружена инъекция кода в IAT
                 }
 
                 pOriginalThunk++;
@@ -68,11 +95,14 @@ void CheckIAT()
 
         pImportDesc++;
     }
+
+    return true; // Инъекций не обнаружено
 }
 
 int main()
 {
     CheckIAT();
+    checkAllMemoryProtection();
 
     return 0;
 }
